@@ -1,4 +1,4 @@
-# Particle Dots
+# Quantum Fabric
 
 An interactive particle system that creates a mesh-like fabric of interconnected points. The particles respond to mouse movement and create an ethereal, quantum-like visualization.
 

@@ -163,8 +163,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Panel dimensions
     const PANEL_WIDTH = 300;
     const PANEL_PADDING = 20;
-    const PANEL_TOP = 20;
-    const PANEL_RIGHT = 20;
+    const PANEL_MARGIN = 24;
+    const PANEL_TOP = 24;
+    const PANEL_RIGHT = 24;
     let panelHeight = 0;
     
     // Animation timing
@@ -200,11 +201,13 @@ document.addEventListener('DOMContentLoaded', function() {
         controlPanel.style.setProperty('--start-height', `${btnRect.height}px`);
         controlPanel.style.setProperty('--start-padding', '0px');
         
-        // Set CSS variables for end state (full panel)
+        // Set CSS variables for end state (full panel); allow up to 768px, respect 24px top/bottom margins
+        const maxPanelHeight = Math.min(768, window.innerHeight - PANEL_MARGIN * 2);
+        const endHeight = Math.min(panelHeight, maxPanelHeight);
         controlPanel.style.setProperty('--end-top', `${PANEL_TOP}px`);
         controlPanel.style.setProperty('--end-right', `${PANEL_RIGHT}px`);
         controlPanel.style.setProperty('--end-width', `${PANEL_WIDTH}px`);
-        controlPanel.style.setProperty('--end-height', `${panelHeight}px`);
+        controlPanel.style.setProperty('--end-height', `${endHeight}px`);
         controlPanel.style.setProperty('--end-padding', `${PANEL_PADDING}px`);
     }
     
@@ -313,7 +316,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Update configuration and display values
     function updateConfig(key, value) {
-        config[key] = parseFloat(value);
+        // Color inputs are hex strings; all other controls are numeric
+        if (key === 'particleColor' || key === 'connectionColor') {
+            config[key] = value;
+        } else {
+            config[key] = parseFloat(value);
+        }
         if (valueDisplays[key]) {
             valueDisplays[key].textContent = value;
         }
@@ -376,6 +384,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Helper function to convert hex to rgba
     function hexToRgba(hex, alpha = 1) {
+        if (typeof hex !== 'string' || !/^#[0-9A-Fa-f]{6}$/.test(hex)) {
+            return `rgba(255, 255, 255, ${alpha})`;
+        }
         const r = parseInt(hex.slice(1, 3), 16);
         const g = parseInt(hex.slice(3, 5), 16);
         const b = parseInt(hex.slice(5, 7), 16);
@@ -384,6 +395,9 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Helper to parse hex to RGB object
     function hexToRgb(hex) {
+        if (typeof hex !== 'string' || !/^#[0-9A-Fa-f]{6}$/.test(hex)) {
+            return { r: 255, g: 255, b: 255 };
+        }
         return {
             r: parseInt(hex.slice(1, 3), 16),
             g: parseInt(hex.slice(3, 5), 16),
@@ -606,41 +620,90 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 1000);
     }
 
-    // Aurora state (using Unicorn Studio embed)
+    // Aurora state (using Unicorn Studio embed) — forms from particle cluster nucleus
     let auroraTime = 0;
     const auroraContainer = document.getElementById('auroraContainer');
     let auroraVisible = false;
+    let auroraCenterX = 0;
+    let auroraCenterY = 0;
     
     // Aurora timing: 4-5 seconds to fully form (270 frames at 60fps)
     const AURORA_FORM_DURATION = 270;
+    const AURORA_POSITION_LERP = 0.12;
+    const AURORA_MIN_CLUSTER_MASS = 2;
     
     function updateAurora() {
         auroraTime += 0.015;
         
         // Track stillness over full formation period
         mouse.stillTime = Math.min(mouse.stillTime + 1, AURORA_FORM_DURATION);
-        
-        // Aurora gradually forms over 4-5 seconds
         const formationProgress = mouse.stillTime / AURORA_FORM_DURATION;
         
-        // Get aurora container size
         const auroraSize = 250;
+        const maxDist = config.mouseInfluence;
         
-        // Center aurora exactly at mouse position
-        auroraContainer.style.left = (mouse.x - auroraSize / 2) + 'px';
-        auroraContainer.style.top = (mouse.y - auroraSize / 2) + 'px';
+        // Compute cluster: center of mass and "mass" (weighted by proximity) from particles in range
+        let sumX = 0, sumY = 0, totalWeight = 0;
+        for (let i = 0; i < particles.length; i++) {
+            const p = particles[i];
+            const dx = mouse.x - p.x;
+            const dy = mouse.y - p.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            if (distance >= maxDist) continue;
+            const weight = 1 - distance / maxDist;
+            sumX += p.x * weight;
+            sumY += p.y * weight;
+            totalWeight += weight;
+        }
         
-        // Show/hide aurora based on stillness
-        if (formationProgress > 0.3 && config.glowIntensity > 0) {
+        let clusterCenterX = mouse.x;
+        let clusterCenterY = mouse.y;
+        const clusterMass = totalWeight;
+        if (totalWeight > 0.01) {
+            clusterCenterX = sumX / totalWeight;
+            clusterCenterY = sumY / totalWeight;
+        }
+        
+        // Initialize aurora center once (avoids starting at 0,0)
+        if (auroraCenterX === 0 && auroraCenterY === 0) {
+            auroraCenterX = clusterCenterX;
+            auroraCenterY = clusterCenterY;
+        }
+        
+        // Smooth aurora position toward cluster center so it morphs from the nucleus
+        auroraCenterX += (clusterCenterX - auroraCenterX) * AURORA_POSITION_LERP;
+        auroraCenterY += (clusterCenterY - auroraCenterY) * AURORA_POSITION_LERP;
+        
+        auroraContainer.style.left = (auroraCenterX - auroraSize / 2) + 'px';
+        auroraContainer.style.top = (auroraCenterY - auroraSize / 2) + 'px';
+        
+        // Normalize cluster strength (expect roughly 0–50+ weight when many particles in range)
+        const maxExpectedWeight = 35;
+        const clusterStrength = Math.min(1, clusterMass / maxExpectedWeight);
+        const hasCluster = clusterMass >= AURORA_MIN_CLUSTER_MASS;
+        
+        // Aurora appears from cluster: only show when still + enough particles clustered
+        const showAurora = formationProgress > 0.25 && hasCluster && config.glowIntensity > 0;
+        
+        if (showAurora) {
             if (!auroraVisible) {
                 auroraContainer.classList.add('visible');
                 auroraVisible = true;
             }
+            // Glow intensity scales with cluster mass — more particles = brighter aurora
+            const glowFromCluster = 0.4 + 0.6 * clusterStrength;
+            const opacity = formationProgress * glowFromCluster;
+            auroraContainer.style.opacity = String(opacity);
+            // Scale aurora from nucleus (0.35) to full size as cluster forms and grows
+            const scale = 0.35 + 0.65 * Math.min(1, formationProgress * (0.5 + 0.5 * clusterStrength));
+            auroraContainer.style.transform = `scale(${scale})`;
         } else {
             if (auroraVisible) {
                 auroraContainer.classList.remove('visible');
                 auroraVisible = false;
             }
+            auroraContainer.style.opacity = '0';
+            auroraContainer.style.transform = 'scale(0.35)';
         }
     }
     
